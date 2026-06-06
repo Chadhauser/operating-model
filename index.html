@@ -19,6 +19,7 @@ button.act{background:var(--ac);color:#04223f;border:none;padding:11px 16px;bord
 button.m{background:var(--p2);color:var(--dim);border:1px solid var(--ln);padding:6px 11px;border-radius:7px;font-size:13px}
 .next{color:var(--ac);font-size:14px;margin-top:5px}.stale{color:var(--wn)}
 .pill{background:var(--p2);border:1px solid var(--ln);border-radius:999px;padding:2px 9px;font-size:12px;color:var(--dim)}
+.pill.run{color:var(--wn);border-color:var(--wn)}.pill.done{color:var(--gd);border-color:var(--gd)}.pill.err{color:#e0584b;border-color:#e0584b}
 .brief{white-space:pre-wrap;background:var(--p2);border:1px solid var(--ln);border-radius:10px;padding:14px;line-height:1.6}
 .tag{font-size:12px;padding:2px 7px;border-radius:5px;background:var(--p2);border:1px solid var(--ln);color:var(--dim)}
 .em{color:var(--gd);font-size:11px}.err{color:#e0584b;font-size:13px;margin-top:8px}.spin{color:var(--dim);font-size:13px}
@@ -47,6 +48,13 @@ label.ck{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--dim)
  <section class="v" data-v="tasks">
    <div class="c"><div class="stack"><input id="td" placeholder="Capture a task…"><div class="row"><select id="tt" class="grow"></select><button class="act" onclick="addTask()">add</button></div></div></div>
    <table id="tk" style="width:100%;border-collapse:collapse"></table></section>
+ <section class="v" data-v="agent">
+   <div class="c"><div class="dim sm">Send a task to your worker. It reads your live data, does the work, and emails you the result — even while you're out. Nothing needs to stay on.</div>
+     <div class="stack" style="margin-top:10px"><select id="athread"></select><textarea id="atext" placeholder="e.g. How many Edge Letter sign-ups do we have and the latest date? Or: draft outreach to the first 3 BNG prospects."></textarea>
+     <button class="act" onclick="sendAgent()">Send task to agent</button><span id="a-spin" class="spin"></span></div>
+     <div id="a-err" class="err"></div></div>
+   <div class="row" style="margin:4px 2px 8px"><span class="grow dim sm">Recent tasks</span><button class="m" onclick="loadJobs()">refresh</button></div>
+   <div id="a-jobs"></div></section>
  <section class="v" data-v="prompt">
    <div class="c"><div class="dim sm">Pick a project, get a prompt, then talk to Claude right here — no paste, no remote desktop.</div>
      <div class="stack" style="margin-top:10px"><select id="pthread"></select><input id="pgoal" placeholder="Optional: goal of this session (blank = derive it)">
@@ -71,7 +79,7 @@ let PW=""; let S={threads:[],tasks:[],watch:[],briefings:[]}; let CONV=[];
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const dS=iso=>iso?Math.floor((Date.now()-new Date(iso).getTime())/864e5):null;
 const fmt=iso=>iso?new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'—';
-const tn=id=>{const t=S.threads.find(x=>x.id===id);return t?t.name:'—';};
+const tn=id=>{const t=S.threads.find(x=>x.id===id);return t?t.name:'general';};
 async function api(action,b){const r=await fetch(API,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({action,password:PW},b||{}))});if(r.status===401)throw new Error('unauthorised');return r.json();}
 
 async function doLogin(){const pw=document.getElementById('pw').value;const e=document.getElementById('login-err');e.textContent='';
@@ -80,15 +88,15 @@ async function doLogin(){const pw=document.getElementById('pw').value;const e=do
 function logout(){localStorage.removeItem('pom_pw');location.reload();}
 function start(){document.getElementById('gate').style.display='none';document.getElementById('app').style.display='block';nav();load();}
 
-const V=[['brief','Briefing'],['state','Projects'],['tasks','Tasks'],['prompt','Work'],['result','Paste result'],['watch','Watch']];
+const V=[['brief','Briefing'],['state','Projects'],['tasks','Tasks'],['agent','Agent'],['prompt','Work'],['result','Paste result'],['watch','Watch']];
 function nav(){const n=document.getElementById('nav');n.innerHTML='';V.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>show(k);b.dataset.k=k;n.appendChild(b);});show('brief');}
-function show(k){document.querySelectorAll('.v').forEach(v=>v.classList.toggle('on',v.dataset.v===k));document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));}
+function show(k){document.querySelectorAll('.v').forEach(v=>v.classList.toggle('on',v.dataset.v===k));document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));if(k==='agent')loadJobs();}
 async function load(){try{const d=await api('state');S=d;document.getElementById('st').textContent='live · '+(d.threads||[]).length;render();}catch(e){document.getElementById('st').textContent='offline';}}
 function fill(id){const s=document.getElementById(id);if(!s)return;const cur=s.value;s.innerHTML=(S.threads||[]).map(t=>'<option value="'+t.id+'">'+esc(t.name)+'</option>').join('');if(cur)s.value=cur;}
 function render(){
  document.getElementById('briefs').innerHTML=(S.briefings||[]).length?S.briefings.map(x=>'<div class="c"><div class="row"><span class="pill">'+esc(x.type)+'</span>'+(x.emailed?'<span class="em">✉</span>':'')+'<span class="dim sm grow">'+fmt(x.created_at)+'</span></div><div class="brief" style="margin-top:8px">'+esc(x.content)+'</div></div>').join(''):'<div class="dim">No briefings yet.</div>';
  document.getElementById('threads').innerHTML=(S.threads||[]).map(t=>{var d=dS(t.last_update),s=d!=null&&d>=(t.stale_days||10);return '<div class="c"><div class="row"><b class="grow">'+esc(t.name)+' <span class="pill">'+esc(t.type)+'</span></b><button class="m" onclick="touch(\''+t.id+'\')">progress</button></div><div class="sm">'+esc(t.current_state_text||'—')+'</div><div class="next">➜ '+esc(t.next_action_text||'')+'</div><div class="sm dim">'+(d==null?'—':d+'d')+(s?' <span class="stale">⚠ stale</span>':'')+'</div></div>';}).join('');
- fill('tt');fill('pthread');fill('ithread');
+ fill('tt');fill('pthread');fill('ithread');fill('athread');
  var rows=(S.tasks||[]).filter(t=>['open','in progress'].includes(t.status));
  document.getElementById('tk').innerHTML=(rows.length?rows.map(t=>'<tr><td style="padding:8px;border-bottom:1px solid var(--ln)">'+esc(t.description)+'<div class="dim sm">'+esc(tn(t.thread_id))+'</div></td><td style="padding:8px;border-bottom:1px solid var(--ln);text-align:right"><button class="m" onclick="doneT(\''+t.id+'\')">done</button></td></tr>').join(''):'<tr><td class="dim">No open tasks.</td></tr>');
  document.getElementById('watch').innerHTML=(S.watch||[]).map(w=>'<div class="c"><b class="sm">'+esc(w.description)+'</b> <span class="pill">'+esc(w.type)+'</span></div>').join('');
@@ -98,16 +106,24 @@ async function addTask(){const d=document.getElementById('td').value.trim();if(!
 async function doneT(id){await api('task_status',{id,status:'done'});load();}
 async function touch(id){await api('thread_touch',{id});load();}
 
+/* ===== Agent ===== */
+async function sendAgent(){const e=document.getElementById('a-err'),sp=document.getElementById('a-spin');e.textContent='';const txt=document.getElementById('atext').value.trim();if(!txt){e.textContent='Type a task first.';return;}sp.textContent='sending…';
+ try{const r=await api('job_submit',{thread_id:document.getElementById('athread').value,instruction:txt});document.getElementById('atext').value='';sp.textContent='working… you can leave the app — it will email you when done';loadJobs();pollJob(r.job_id);}catch(err){e.textContent='Error: '+err.message;sp.textContent='';}}
+async function pollJob(id){for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,4000));let j;try{j=await api('job_get',{job_id:id});}catch(_){continue;}if(j&&(j.status==='done'||j.status==='error')){document.getElementById('a-spin').textContent=j.status==='done'?'done ✓':'finished with an error';loadJobs();return;}}document.getElementById('a-spin').textContent='still working — it will email you the result';loadJobs();}
+async function loadJobs(){try{const r=await api('jobs_list');renderJobs(r.jobs||[]);}catch(_){}}
+function renderJobs(js){document.getElementById('a-jobs').innerHTML=js.length?js.map(j=>{var cls=j.status==='done'?'done':j.status==='error'?'err':j.status==='running'?'run':'';return '<div class="c"><div class="row"><span class="pill '+cls+'">'+esc(j.status)+'</span><span class="dim sm grow">'+esc(tn(j.thread_id))+' · '+fmt(j.created_at)+'</span></div><div class="sm" style="margin-top:6px"><b>'+esc(String(j.instruction).slice(0,140))+'</b></div>'+(j.result?'<div class="brief" style="margin-top:8px">'+esc(j.result)+'</div>':'')+'</div>';}).join(''):'<div class="dim">No tasks yet.</div>';}
+
+/* ===== Work / prompt + in-app chat ===== */
 async function genPrompt(){const e=document.getElementById('p-err'),sp=document.getElementById('p-spin');e.textContent='';sp.textContent='writing…';document.getElementById('pout').value='';CONV=[];renderConv();document.getElementById('follow').style.display='none';
  try{const r=await api('generate_prompt',{thread_id:document.getElementById('pthread').value,goal:document.getElementById('pgoal').value.trim()});document.getElementById('pout').value=r.prompt||r.error||'';}catch(err){e.textContent='Error: '+err.message;}sp.textContent='';}
 function copyOut(){const t=document.getElementById('pout');if(!t.value)return;t.select();try{document.execCommand('copy');}catch(_){}try{navigator.clipboard.writeText(t.value);}catch(_){}document.getElementById('pcopied').textContent='copied';setTimeout(()=>document.getElementById('pcopied').textContent='',1500);}
-
 function renderConv(){document.getElementById('conv').innerHTML=CONV.map(m=>'<div class="c" style="background:'+(m.role==='user'?'var(--p2)':'#16242f')+'"><div class="dim sm" style="margin-bottom:4px">'+(m.role==='user'?'You':'Claude')+'</div><div style="white-space:pre-wrap">'+esc(m.content)+'</div></div>').join('');}
 async function runChat(){const e=document.getElementById('p-err');e.textContent='';const c=document.getElementById('conv');c.insertAdjacentHTML('beforeend','<div class="dim sm" id="thinking">Claude is thinking…</div>');
  try{const r=await api('chat',{thread_id:document.getElementById('pthread').value,messages:CONV});CONV.push({role:'assistant',content:r.reply||r.error||'(no reply)'});renderConv();}catch(err){e.textContent='Error: '+err.message;const th=document.getElementById('thinking');if(th)th.remove();}}
 async function sendToClaude(){const txt=document.getElementById('pout').value.trim();if(!txt)return;CONV=[{role:'user',content:txt}];renderConv();document.getElementById('follow').style.display='flex';await runChat();}
 async function followUp(){const i=document.getElementById('cfollow');const t=i.value.trim();if(!t)return;CONV.push({role:'user',content:t});i.value='';renderConv();await runChat();}
 
+/* ===== Paste result ===== */
 async function sendResult(){const e=document.getElementById('i-err'),sp=document.getElementById('i-spin'),out=document.getElementById('i-out');e.textContent='';out.innerHTML='';const txt=document.getElementById('itext').value.trim();if(!txt){e.textContent='Paste something first.';return;}sp.textContent='updating…';
  try{const r=await api('ingest',{thread_id:document.getElementById('ithread').value,text:txt});out.innerHTML='<div class="c" style="margin-top:10px"><div class="sm"><b>Updated.</b></div><div class="sm" style="margin-top:6px"><b>State:</b> '+esc(r.new_state||'')+'</div><div class="next">➜ '+esc(r.new_next_action||'')+'</div><div class="sm" style="margin-top:6px"><b>Read:</b> '+esc(r.assessment||'')+'</div>'+((r.new_tasks||[]).length?'<div class="sm" style="margin-top:6px"><b>New tasks:</b> '+r.new_tasks.map(t=>esc(t.description)).join('; ')+'</div>':'')+'</div>';document.getElementById('itext').value='';load();}catch(err){e.textContent='Error: '+err.message;}sp.textContent='';}
 
