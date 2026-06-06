@@ -48,11 +48,13 @@ label.ck{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--dim)
    <div class="c"><div class="stack"><input id="td" placeholder="Capture a task…"><div class="row"><select id="tt" class="grow"></select><button class="act" onclick="addTask()">add</button></div></div></div>
    <table id="tk" style="width:100%;border-collapse:collapse"></table></section>
  <section class="v" data-v="prompt">
-   <div class="c"><div class="dim sm">Turn "carry on" into a real prompt. Pick a project, optionally say the goal, and get a ready-to-paste prompt with guardrails baked in.</div>
+   <div class="c"><div class="dim sm">Pick a project, get a prompt, then talk to Claude right here — no paste, no remote desktop.</div>
      <div class="stack" style="margin-top:10px"><select id="pthread"></select><input id="pgoal" placeholder="Optional: goal of this session (blank = derive it)">
      <button class="act" onclick="genPrompt()">Write me a prompt</button><span id="p-spin" class="spin"></span></div>
-     <textarea id="pout" style="margin-top:10px" placeholder="Your prompt appears here…"></textarea>
-     <div class="row" style="margin-top:6px"><button class="m" onclick="copyOut()">Copy</button><span id="pcopied" class="em"></span></div>
+     <textarea id="pout" style="margin-top:10px" placeholder="Your prompt appears here — or just type what you want and send it to Claude."></textarea>
+     <div class="row" style="margin-top:6px"><button class="m" onclick="copyOut()">Copy</button><button class="act" onclick="sendToClaude()">Send to Claude →</button><span id="pcopied" class="em"></span></div>
+     <div id="conv" style="margin-top:12px"></div>
+     <div class="row" id="follow" style="display:none;margin-top:8px"><input id="cfollow" class="grow" placeholder="Reply to Claude…"><button class="act" onclick="followUp()">send</button></div>
      <div id="p-err" class="err"></div></div></section>
  <section class="v" data-v="result">
    <div class="c"><div class="dim sm">Did some work? Paste the outcome here and it updates the project — state, next step, and any new tasks.</div>
@@ -65,7 +67,7 @@ label.ck{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--dim)
 
 <script>
 const API="https://pesgnqmohcawmpcmsupl.supabase.co/functions/v1/pom-api";
-let PW=""; let S={threads:[],tasks:[],watch:[],briefings:[]};
+let PW=""; let S={threads:[],tasks:[],watch:[],briefings:[]}; let CONV=[];
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const dS=iso=>iso?Math.floor((Date.now()-new Date(iso).getTime())/864e5):null;
 const fmt=iso=>iso?new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'—';
@@ -78,7 +80,7 @@ async function doLogin(){const pw=document.getElementById('pw').value;const e=do
 function logout(){localStorage.removeItem('pom_pw');location.reload();}
 function start(){document.getElementById('gate').style.display='none';document.getElementById('app').style.display='block';nav();load();}
 
-const V=[['brief','Briefing'],['state','Projects'],['tasks','Tasks'],['prompt','Prompt'],['result','Paste result'],['watch','Watch']];
+const V=[['brief','Briefing'],['state','Projects'],['tasks','Tasks'],['prompt','Work'],['result','Paste result'],['watch','Watch']];
 function nav(){const n=document.getElementById('nav');n.innerHTML='';V.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.onclick=()=>show(k);b.dataset.k=k;n.appendChild(b);});show('brief');}
 function show(k){document.querySelectorAll('.v').forEach(v=>v.classList.toggle('on',v.dataset.v===k));document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.k===k));}
 async function load(){try{const d=await api('state');S=d;document.getElementById('st').textContent='live · '+(d.threads||[]).length;render();}catch(e){document.getElementById('st').textContent='offline';}}
@@ -96,9 +98,15 @@ async function addTask(){const d=document.getElementById('td').value.trim();if(!
 async function doneT(id){await api('task_status',{id,status:'done'});load();}
 async function touch(id){await api('thread_touch',{id});load();}
 
-async function genPrompt(){const e=document.getElementById('p-err'),sp=document.getElementById('p-spin');e.textContent='';sp.textContent='writing…';document.getElementById('pout').value='';
+async function genPrompt(){const e=document.getElementById('p-err'),sp=document.getElementById('p-spin');e.textContent='';sp.textContent='writing…';document.getElementById('pout').value='';CONV=[];renderConv();document.getElementById('follow').style.display='none';
  try{const r=await api('generate_prompt',{thread_id:document.getElementById('pthread').value,goal:document.getElementById('pgoal').value.trim()});document.getElementById('pout').value=r.prompt||r.error||'';}catch(err){e.textContent='Error: '+err.message;}sp.textContent='';}
 function copyOut(){const t=document.getElementById('pout');if(!t.value)return;t.select();try{document.execCommand('copy');}catch(_){}try{navigator.clipboard.writeText(t.value);}catch(_){}document.getElementById('pcopied').textContent='copied';setTimeout(()=>document.getElementById('pcopied').textContent='',1500);}
+
+function renderConv(){document.getElementById('conv').innerHTML=CONV.map(m=>'<div class="c" style="background:'+(m.role==='user'?'var(--p2)':'#16242f')+'"><div class="dim sm" style="margin-bottom:4px">'+(m.role==='user'?'You':'Claude')+'</div><div style="white-space:pre-wrap">'+esc(m.content)+'</div></div>').join('');}
+async function runChat(){const e=document.getElementById('p-err');e.textContent='';const c=document.getElementById('conv');c.insertAdjacentHTML('beforeend','<div class="dim sm" id="thinking">Claude is thinking…</div>');
+ try{const r=await api('chat',{thread_id:document.getElementById('pthread').value,messages:CONV});CONV.push({role:'assistant',content:r.reply||r.error||'(no reply)'});renderConv();}catch(err){e.textContent='Error: '+err.message;const th=document.getElementById('thinking');if(th)th.remove();}}
+async function sendToClaude(){const txt=document.getElementById('pout').value.trim();if(!txt)return;CONV=[{role:'user',content:txt}];renderConv();document.getElementById('follow').style.display='flex';await runChat();}
+async function followUp(){const i=document.getElementById('cfollow');const t=i.value.trim();if(!t)return;CONV.push({role:'user',content:t});i.value='';renderConv();await runChat();}
 
 async function sendResult(){const e=document.getElementById('i-err'),sp=document.getElementById('i-spin'),out=document.getElementById('i-out');e.textContent='';out.innerHTML='';const txt=document.getElementById('itext').value.trim();if(!txt){e.textContent='Paste something first.';return;}sp.textContent='updating…';
  try{const r=await api('ingest',{thread_id:document.getElementById('ithread').value,text:txt});out.innerHTML='<div class="c" style="margin-top:10px"><div class="sm"><b>Updated.</b></div><div class="sm" style="margin-top:6px"><b>State:</b> '+esc(r.new_state||'')+'</div><div class="next">➜ '+esc(r.new_next_action||'')+'</div><div class="sm" style="margin-top:6px"><b>Read:</b> '+esc(r.assessment||'')+'</div>'+((r.new_tasks||[]).length?'<div class="sm" style="margin-top:6px"><b>New tasks:</b> '+r.new_tasks.map(t=>esc(t.description)).join('; ')+'</div>':'')+'</div>';document.getElementById('itext').value='';load();}catch(err){e.textContent='Error: '+err.message;}sp.textContent='';}
